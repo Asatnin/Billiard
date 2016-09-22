@@ -1,0 +1,1409 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Loading Models</title>
+    <script type="text/javascript" src="../libs/three.js"></script>
+    <script type="text/javascript" src="../libs/Stats.js"></script>
+    <script type="text/javascript" src="../libs/dat.gui.js"></script>
+    <script type="text/javascript" src="../libs/OBJLoader.js"></script>
+    <script type="text/javascript" src="../libs/MTLLoader.js"></script>
+    <script type="text/javascript" src="../libs/OBJMTLLoader.js"></script>
+    <script type="text/javascript" src="../libs/OrbitControls.js"></script>
+    <script type="text/javascript" src="../libs/Box2dWeb/Box2dWeb-2.1.a.3.js"></script>
+    <script type="text/javascript" src="../libs/tween.min.js"></script>
+    <style>
+
+        body{
+            margin: 0;
+            overflow: hidden;
+        }
+
+    </style>
+</head>
+<body>
+
+<!-- Div for statistics -->
+<div id="Stats-output">
+</div>
+
+<!-- Div for output -->
+<div id="WebGL-output">
+</div>
+
+<!-- Main Javascipt program -->
+<script>
+    var scene = 0, clock = 0, stats = 0, camera = 0, renderer = 0, orbitControls = 0;
+    var worlds = 0, circleBody = 0;
+    var mag_scale_factor = 7.705, centerX = 20, centerY = 10;
+    var tableLength = 2.54, tableWidth = 1.27;
+    var scaleFactor = 14;
+    var foot_spotX = 20 - tableLength / 4 * scaleFactor, foot_spotY = 10;
+    var ball_radius = 0.4, ball_radius_graphics = 6.15;
+    var balls = [], balls_counter = 16, scene_balls = [];
+    var cueMesh;
+    var shoots = 0;
+    var currentPlayer = 1; // всего игроков два: под номерами 1 и 2
+    var player1BallType = "unknown", player2BallType = "unknown"; // типы шаров каждого игрока: solid и striped
+    var ballBallCollisions = 0, ballWallCollisions = 0; // количество столкновений после последнего удара битком
+    var pocketedBalls = []; // индексы забитых в лузы шаров после последнего удара битком
+    var player1Balls = [], player2Balls = []; // индексы забитых шаров каждым игроком
+    var cueBallCollisions = []; // каких шаров коснулся биток
+    var positions = [ { x: foot_spotX + 0.6 * tableLength * scaleFactor, y: foot_spotY, num: 0 },
+        { x: foot_spotX, y: foot_spotY, num: 9 },
+        { x: foot_spotX - 2 * ball_radius, y: foot_spotY - ball_radius, num: 7 },
+        { x: foot_spotX - 2 * ball_radius, y: foot_spotY + ball_radius, num: 12 },
+        { x: foot_spotX - 4 * ball_radius, y: foot_spotY - 2 * ball_radius, num: 15 },
+        { x: foot_spotX - 4 * ball_radius, y: foot_spotY, num: 8 },
+        { x: foot_spotX - 4 * ball_radius, y: foot_spotY + 2 * ball_radius, num: 1 },
+        { x: foot_spotX - 6 * ball_radius, y: foot_spotY - 2 * ball_radius, num: 6 },
+        { x: foot_spotX - 6 * ball_radius, y: foot_spotY - ball_radius, num: 10 },
+        { x: foot_spotX - 6 * ball_radius, y: foot_spotY + ball_radius, num: 3 },
+        { x: foot_spotX - 6 * ball_radius, y: foot_spotY + 2 * ball_radius, num: 14 },
+        { x: foot_spotX - 8 * ball_radius, y: foot_spotY - 3 * ball_radius, num: 11 },
+        { x: foot_spotX - 8 * ball_radius, y: foot_spotY - 2 * ball_radius, num: 2 },
+        { x: foot_spotX - 8 * ball_radius, y: foot_spotY, num: 13 },
+        { x: foot_spotX - 8 * ball_radius, y: foot_spotY + 2 * ball_radius, num: 4 },
+        { x: foot_spotX - 8 * ball_radius, y: foot_spotY + 3 * ball_radius, num: 5 } ];
+
+    // for changing position
+    var b2Vec2 = Box2D.Common.Math.b2Vec2;
+    var oldCameraPosition = 0, oldBallPosition;
+
+    // for text
+    var text1 = 0, text2 = 0;
+
+    // Game states
+    var gameState = "setup";
+    // In setup player set position of cue ball
+    // In prepareShoot camera move to cue ball
+    // In rotateCue player rotate cue behind cue ball
+    // In makeShoot player move mouse to make shoot
+    // In processingShoot we wait when all balls will be stopped
+    // In preparingNextShoot we prepare next shoot
+    // In setCueBall player set cue ball on the table
+
+    // Audio
+    var context = 0;
+    var compressor = 0;
+    var convolver = 0;
+    var pingBuffer = 0;
+
+    var ballBallLight = 0;
+    var ballBallMedium = 0;
+    var ballBallHard = 0;
+    var stickCueLight = 0;
+    var stickCueMedium = 0;
+    var stickCueHard = 0;
+    var ballPocket = 0;
+    var mediumEdge = 0;
+    var hardEdge = 0;
+
+    // Supporting audio for different browsers
+    if (window.hasOwnProperty('AudioContext') && !window.hasOwnProperty('webkitAudioContext'))
+        window.webkitAudioContext = AudioContext;
+
+    // Pressed button handler
+    window.onkeypress = keyPressed;
+    window.onclick = clickListener;
+    window.onmousemove = mouseMoveListener;
+
+    init();
+    initAudio();
+    render();
+
+    function init() {
+        scene = new THREE.Scene();
+        clock = new THREE.Clock();
+        stats = initStats();
+        initPhysics();
+
+        camera = new THREE.PerspectiveCamera(45 , window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.x = 150;
+        camera.position.y = 250;
+        camera.position.z = 250;
+        camera.lookAt(scene.position);
+
+        console.log(camera.position.distanceTo(scene.position));
+
+        renderer = new THREE.WebGLRenderer();
+        renderer.setClearColor(0x000000, 1.0);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMapEnabled = true;
+        renderer.shadowMapSoft = true;
+
+        document.getElementById("WebGL-output").appendChild(renderer.domElement);
+
+        var axes = new THREE.AxisHelper(200);
+        //scene.add(axes);
+
+        addLight();
+        loadModels();
+        setControls();
+
+        // Init text
+        text1 = document.createElement('div');
+        text1.style.position = 'absolute';
+        text1.style.width = 100;
+        text1.style.height = 100;
+        text1.style.backgroundColor = "black";
+        text1.style.color = "red";
+        text1.innerHTML = "Player 1";
+        text1.style.top = 10 + 'px';
+        text1.style.left = 1250 + 'px';
+        document.body.appendChild(text1);
+
+        text2 = document.createElement('div');
+        text2.style.position = 'absolute';
+        text2.style.width = 100;
+        text2.style.height = 100;
+        text2.style.backgroundColor = "black";
+        text2.style.color = "white";
+        text2.innerHTML = "Player 2";
+        text2.style.top = 30 + 'px';
+        text2.style.left = 1250 + 'px';
+        document.body.appendChild(text2);
+    }
+
+    function initAudio() {
+        context = new webkitAudioContext();
+
+        if (context.createDynamicsCompressor) {
+            compressor = context.createDynamicsCompressor();
+            compressor.connect(context.destination);
+        } else {
+            compressor = context.destination;
+        }
+
+        convolver = context.createConvolver();
+        convolver.connect(compressor);
+
+        loadBallBallLight("sounds/ball-ball-light2.wav");
+        loadBallBallMedium("sounds/ball-ball-medium3.wav");
+        loadBallBallHard("sounds/ball-ball-hard2.wav");
+
+        loadMediumEdge("sounds/ball-edge-medium2.wav");
+        loadHardEdge("sounds/ball-edge-hard1.wav");
+
+        loadStickCueLight("sounds/stick-cue-light2.wav");
+        loadStickCueMedium("sounds/stick-cue-medium5.wav");
+        loadStickCueHard("sounds/stick-cue-medium2.wav");
+
+        loadBallPocket("sounds/ball-pocket-balls.wav");
+
+        loadImpulseResponse('sounds/kitchen-true-stereo.wav');
+    }
+
+    function loadStickCueLight(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { stickCueLight = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadStickCueMedium(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { stickCueMedium = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadStickCueHard(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { stickCueHard = buffer; });
+        };
+
+        request.send();
+    }
+
+
+    function loadBallPocket(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { ballPocket = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadBallBallLight(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { ballBallLight = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadBallBallMedium(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { ballBallMedium = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadBallBallHard(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { ballBallHard = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadMediumEdge(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { mediumEdge = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadHardEdge(url) {
+        // Load asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { hardEdge = buffer; });
+        };
+
+        request.send();
+    }
+
+    function loadImpulseResponse(url) {
+        // Load impulse response asynchronously
+        var request = new XMLHttpRequest();
+        request.open("GET", url, true);
+        request.responseType = "arraybuffer";
+        request.onload = function() {
+            context.decodeAudioData(request.response, function(buffer) { convolver.buffer = buffer; });
+        };
+
+        request.send();
+    }
+
+    function playSound(collisionType, velocity, x, y) {
+        var buffer = 0;
+        var gainScale = 1.0;
+        var sendScale = 1.0;
+
+        if (collisionType == 0) {
+            //console.log(velocity);
+            if (velocity >= 0.66) {
+                buffer = ballBallHard;
+            } else if (velocity >= 0.36) {
+                buffer = ballBallMedium;
+            } else {
+                buffer = ballBallLight;
+            }
+        } else if (collisionType == 1) {
+            if (velocity < 0.66666) {
+                buffer = mediumEdge;
+            } else {
+                buffer = hardEdge;
+            }
+            gainScale = 0.2;
+            sendScale = 0.01;
+        } else if (collisionType == 2) {
+            if (velocity < 0.36) {
+                buffer = stickCueLight;
+            } else if (velocity < 0.66) {
+                buffer = stickCueMedium;
+            } else {
+                buffer = stickCueHard;
+            }
+            gainScale = 1;
+            sendScale = 1.0;
+        } else if (collisionType == 3) {
+            buffer = ballPocket;
+            gainScale = 0.5;
+            sendScale = 2.0;
+        }
+
+        var voice = context.createBufferSource();
+        if (voice) {
+            voice.buffer = buffer;
+
+            // base volume on velocity
+            var xx = velocity;
+            if (xx > 1.0) xx = 1.0;
+            if (xx < 0.0) xx = 0.0;
+            var s = Math.sin(0.5 * xx * Math.PI);
+            s = s*s;
+            var gain = gainScale * s;
+            var isQuiet = (gain < 0.5);
+
+            // Setup send and main gains
+            var sendGain = context.createGain();
+            var mainGain = context.createGain();
+
+            // Use biquad filter API if available.
+            var filter = context.createBiquadFilter();
+
+            sendGain.gain.value = sendScale;
+            mainGain.gain.value = gain;
+            voice.connect(filter);
+            filter.connect(sendGain);
+            filter.connect(mainGain);
+            sendGain.connect(convolver);
+            mainGain.connect(compressor);
+
+            // // Randomize pitch
+            var r = Math.random();
+            var cents = 600.0 * (r - 0.5);
+            var rate = Math.pow(2.0, cents / 1200.0);
+            voice.playbackRate.value = rate;  // really rate (not pitch)
+            //
+            // Adjust filter
+            var value = 0.5 + 0.5 * xx;
+            var noctaves = Math.log(22050.0 / 40.0) / Math.LN2;
+            var v2 = Math.pow(2.0, noctaves * (value - 1.0));
+
+            var sampleRate = 44100.0;
+            var nyquist = sampleRate * 0.5;
+
+            filter.type = "lowpass";
+            filter.frequency.value = v2 * nyquist;
+            filter.Q.value = 0.0; // this is actually resonance in dB
+
+            var azimuth = 0.5*Math.PI * (x - 200.0 /*250.0*/) / 150.0;
+            if (azimuth < -0.5*Math.PI) azimuth = -0.5*Math.PI;
+            if (azimuth > 0.5*Math.PI) azimuth = 0.5*Math.PI;
+
+            var posX = 10.0 * Math.sin(azimuth);
+            var posZ = 10.0 * Math.cos(azimuth);
+
+
+            var elevation = -0.5*Math.PI * (y - 250.0) / 150.0;
+            if (elevation < -0.5*Math.PI) elevation = -0.5*Math.PI;
+            if (elevation > 0.5*Math.PI) elevation = 0.5*Math.PI;
+
+            var scaleY = Math.sin(elevation);
+            var scaleXZ = Math.cos(elevation);
+            posX *= scaleXZ;
+            posZ *= scaleXZ;
+            var posY = scaleY * 10.0;
+
+            if (collisionType == 3) {
+                voice.start(context.currentTime + 0.125);
+            } else {
+                voice.start(0);
+            }
+        }
+    }
+
+    function initPhysics() {
+        var   b2BodyDef = Box2D.Dynamics.b2BodyDef
+                ,	b2Body = Box2D.Dynamics.b2Body
+                ,	b2FixtureDef = Box2D.Dynamics.b2FixtureDef
+                ,	b2Fixture = Box2D.Dynamics.b2Fixture
+                ,	b2World = Box2D.Dynamics.b2World
+                ,	b2MassData = Box2D.Collision.Shapes.b2MassData
+                ,	b2PolygonShape = Box2D.Collision.Shapes.b2PolygonShape
+                ,	b2CircleShape = Box2D.Collision.Shapes.b2CircleShape
+                ,	b2DebugDraw = Box2D.Dynamics.b2DebugDraw
+                ,   b2EdgeShape = Box2D.Collision.Shapes.b2EdgeShape
+                ,   b2Point = Box2D.Collision.b2Point
+                ,   b2FrictionJoint = Box2D.Dynamics.Joints.b2FrictionJoint
+                ,   b2FrictionJointDef = Box2D.Dynamics.Joints.b2FrictionJointDef
+                ,   b2ContactListener = Box2D.Dynamics.b2ContactListener
+                ;
+
+        world = new b2World(
+                new b2Vec2(0, 0)    //gravity
+                ,  true                 //allow sleep
+        );
+
+        // Add physics table
+        var contactListener = new b2ContactListener;
+        contactListener.BeginContact = function (contact) {
+            var fixtureA = contact.GetFixtureA();
+            var fixtureB = contact.GetFixtureB();
+            if (fixtureA.IsSensor() || fixtureB.IsSensor()) {
+                if (fixtureB.IsSensor()) {
+                    var fixtureC = fixtureA;
+                    fixtureA = fixtureB;
+                    fixtureB = fixtureC;
+                }
+                // now sensor is fixtureA
+//                console.log("Collision with sensor:");
+//                console.log(fixtureA.GetBody().GetPosition());
+//                console.log(fixtureB.GetBody().GetPosition());
+            } else if (fixtureA.GetUserData() === "ball" && fixtureB.GetUserData() === "ball") {
+                //console.log("ball - ball");
+                if (fixtureA.GetBody() == balls[0]) {
+                    for (var i = 1; i < balls_counter; i++) {
+                        if (balls[i] === fixtureB.GetBody()) {
+                            cueBallCollisions.push(i);
+                            break;
+                        }
+                    }
+                } else if (fixtureB.GetBody() == balls[0]) {
+                    for (var i = 1; i < balls_counter; i++) {
+                        if (balls[i] === fixtureA.GetBody()) {
+                            cueBallCollisions.push(i);
+                            break;
+                        }
+                    }
+                }
+                ballBallCollisions++;
+                var v1_x = fixtureA.GetBody().GetLinearVelocity().x, v1_y = fixtureA.GetBody().GetLinearVelocity().y;
+                var v1 = Math.sqrt(v1_x * v1_x + v1_y * v1_y);
+                var v2_x = fixtureB.GetBody().GetLinearVelocity().x, v2_y = fixtureB.GetBody().GetLinearVelocity().y;
+                var v2 = Math.sqrt(v2_x * v2_x + v2_y * v2_y);
+                var soundVelocity = v1 + v2;
+                if (soundVelocity > 100) {
+                    soundVelocity = 100;
+                }
+                if (soundVelocity != 0) {
+                    soundVelocity /= 100;
+                    playSound(0, soundVelocity, 0, 0);
+                }
+            } else if ((fixtureA.GetUserData() === "ball" && fixtureB.GetUserData() === "wall") ||
+                    (fixtureB.GetUserData() === "ball" && fixtureA.GetUserData() === "wall")) {
+                ballWallCollisions++;
+                var ballFixture = 0;
+                if (fixtureA.GetUserData() === "ball") {
+                    ballFixture = fixtureA;
+                } else {
+                    ballFixture = fixtureB;
+                }
+                var v_x = ballFixture.GetBody().GetLinearVelocity().x,
+                        v_y = ballFixture.GetBody().GetLinearVelocity().y;
+                var soundVelocity = Math.sqrt(v_x * v_x + v_y * v_y);
+                if (soundVelocity > 100) {
+                    soundVelocity = 100;
+                }
+                if (soundVelocity != 0) {
+                    soundVelocity /= 100;
+                    playSound(1, soundVelocity, 0, 0);
+                }
+            }
+        };
+        contactListener.EndContact = function (contact) {
+            var fixtureA = contact.GetFixtureA();
+            var fixtureB = contact.GetFixtureB();
+            if (fixtureA.IsSensor() || fixtureB.IsSensor()) {
+                if (fixtureB.IsSensor()) {
+                    var fixtureC = fixtureA;
+                    fixtureA = fixtureB;
+                    fixtureB = fixtureC;
+                }
+                // now sensor is fixtureA
+//                console.log("End collision with sensor:");
+//                console.log(fixtureA.GetBody().GetPosition());
+//                console.log(fixtureB.GetBody().GetPosition());
+
+                console.log("Ball is sinking");
+                // Sink ball
+                for (var i = 0; i < balls_counter; i++) {
+                    if (balls[i] === fixtureB.GetBody()) {
+                        if (i != 0) {
+                            pocketedBalls.push(i);
+                            if (currentPlayer == 1) {
+                                player1Balls.push(i);
+                            } else {
+                                player2Balls.push(i);
+                            }
+                        }
+
+                        scene_balls[i].status = "sinking";
+                        var from = scene_balls[i].position.clone();
+                        var to = new THREE.Vector3(from.x, from.y - 20, from.z);
+                        var sinkingTween = new TWEEN.Tween(from).to(to, 250);
+                        sinkingTween.onUpdate(function() {
+                            scene_balls[i].position.x = from.x;
+                            scene_balls[i].position.y = from.y;
+                            scene_balls[i].position.z = from.z;
+                        });
+                        sinkingTween.onComplete(function() {
+                            balls[i].SetAwake(false);
+                            scene.remove(scene_balls[i]);
+                        });
+                        sinkingTween.start();
+                        break;
+                    }
+                }
+                // Play sound
+                playSound(3, 0, 0, 0);
+            }
+        };
+        world.SetContactListener(contactListener);
+
+        var offset = 0.05;
+        var cornerPocket = 0.082, middlePocket = 0.063, cornerTarget = 0.058;
+        stats = initStats();
+
+        // create table
+        var groundBodyDef = new b2BodyDef;
+        groundBodyDef.type = b2Body.b2_staticBody;
+        groundBodyDef.position.x = 20;
+        groundBodyDef.position.y = 10;
+        var groundBodyFixtureDef = new b2FixtureDef;
+        groundBodyFixtureDef.restitution = 0.5;
+        groundBodyFixtureDef.friction = 0.2;
+        groundBodyFixtureDef.density = 0;
+        groundBodyFixtureDef.shape = new b2PolygonShape;
+        groundBodyFixtureDef.shape.SetAsBox(2.54 / 2 * scaleFactor, 1.27 / 2 * scaleFactor);
+        var groundBody = world.CreateBody(groundBodyDef);
+        groundBody.CreateFixture(groundBodyFixtureDef);
+
+        // create walls
+        var wallBodyDef = new b2BodyDef;
+        wallBodyDef.type = b2Body.b2_staticBody;
+        var wallBodyFixtureDef = new b2FixtureDef;
+        wallBodyFixtureDef.density = 0;
+        wallBodyFixtureDef.restitution = 0.9;
+        wallBodyFixtureDef.friction = 0.2;
+        wallBodyFixtureDef.shape = new b2PolygonShape;
+        wallBodyFixtureDef.userData = "wall";
+
+        wallBodyDef.position.x = 20 - tableLength / 4 * scaleFactor; // bottom half 1
+        wallBodyDef.position.y = 10 + 1.27 / 2 * scaleFactor + offset;
+        wallBodyFixtureDef.shape.SetAsBox((tableLength / 4 - (cornerPocket + middlePocket) / 2) * scaleFactor, 0.1);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        wallBodyDef.position.x = 20 + tableLength / 4 * scaleFactor; // bottom half 2
+        wallBodyDef.position.y = 10 + 1.27 / 2 * scaleFactor + offset;
+        wallBodyFixtureDef.shape.SetAsBox((tableLength / 4 - (cornerPocket + middlePocket) / 2) * scaleFactor, 0.1);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        wallBodyDef.position.x = 20 + 2.54 / 2 * scaleFactor + offset; // right
+        wallBodyDef.position.y = 10;
+        wallBodyFixtureDef.shape.SetAsBox(0.1, (tableWidth / 2 - cornerPocket) * scaleFactor);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        wallBodyDef.position.x = 20 - tableLength / 4 * scaleFactor; // top half 1
+        wallBodyDef.position.y = 10 - 1.27 / 2 * scaleFactor - offset;
+        wallBodyFixtureDef.shape.SetAsBox((tableLength / 4 - (cornerPocket + middlePocket) / 2) * scaleFactor, 0.1);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        wallBodyDef.position.x = 20 + tableLength / 4 * scaleFactor; // top half 2
+        wallBodyDef.position.y = 10 - 1.27 / 2 * scaleFactor - offset;
+        wallBodyFixtureDef.shape.SetAsBox((tableLength / 4 - (cornerPocket + middlePocket) / 2) * scaleFactor, 0.1);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        wallBodyDef.position.x = 20 - 2.54 / 2 * scaleFactor - offset; // left
+        wallBodyDef.position.y = 10;
+        wallBodyFixtureDef.shape.SetAsBox(0.1, (tableWidth / 2 - cornerPocket) * scaleFactor);
+        world.CreateBody(wallBodyDef).CreateFixture(wallBodyFixtureDef);
+
+        // create pockets
+
+        var pocketBodyDef = new b2BodyDef;
+        pocketBodyDef.type = b2Body.b2_staticBody;
+        var pocketBodyFixtureDef = new b2FixtureDef;
+        pocketBodyFixtureDef.shape = new b2PolygonShape;
+        pocketBodyFixtureDef.isSensor = true;
+
+        pocketBodyDef.position.x = 20; // bottom middle
+        pocketBodyDef.position.y = 10 + tableWidth / 2 * scaleFactor + offset * 5;
+        pocketBodyFixtureDef.shape.SetAsBox(middlePocket * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef)
+
+        pocketBodyDef.position.x = 20; // top middle
+        pocketBodyDef.position.y = 10 - tableWidth / 2 * scaleFactor - offset * 5;
+        pocketBodyFixtureDef.shape.SetAsBox(middlePocket * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef);
+
+        var cornerOffset = cornerPocket * Math.cos(Math.PI / 4);
+        // top left
+        pocketBodyDef.position.x = 20 - (tableLength / 2 - cornerOffset) * scaleFactor - offset * 5;
+        pocketBodyDef.position.y = 10 - (tableWidth / 2 - cornerOffset) * scaleFactor - offset * 5;
+        pocketBodyDef.angle = -Math.PI / 4;
+        pocketBodyFixtureDef.shape.SetAsBox(cornerTarget * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef);
+
+        // top right
+        pocketBodyDef.position.x = 20 + (tableLength / 2 - cornerOffset) * scaleFactor + offset * 5;
+        pocketBodyDef.position.y = 10 - (tableWidth / 2 - cornerOffset) * scaleFactor - offset * 5;
+        pocketBodyDef.angle = Math.PI / 4;
+        pocketBodyFixtureDef.shape.SetAsBox(cornerTarget * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef);
+
+        // bottom left
+        pocketBodyDef.position.x = 20 - (tableLength / 2 - cornerOffset) * scaleFactor - offset * 5;
+        pocketBodyDef.position.y = 10 + (tableWidth / 2 - cornerOffset) * scaleFactor + offset * 5;
+        pocketBodyDef.angle = Math.PI / 4;
+        pocketBodyFixtureDef.shape.SetAsBox(cornerTarget * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef);
+
+        // bottom right
+        pocketBodyDef.position.x = 20 + (tableLength / 2 - cornerOffset) * scaleFactor + offset * 5;
+        pocketBodyDef.position.y = 10 + (tableWidth / 2 - cornerOffset) * scaleFactor + offset * 5;
+        pocketBodyDef.angle = -Math.PI / 4;
+        pocketBodyFixtureDef.shape.SetAsBox(cornerTarget * scaleFactor, 0.1);
+        world.CreateBody(pocketBodyDef).CreateFixture(pocketBodyFixtureDef);
+
+
+        var circleBodyDef = new b2BodyDef;
+        circleBodyDef.type = b2Body.b2_dynamicBody;
+        circleBodyDef.fixedRotation = false;
+        circleBodyDef.angularDamping = 1;
+        circleBodyDef.linearDamping = 1;
+        circleBodyDef.bullet = true;
+        //circleBodyDef.density = 1700 / Math.pow(scaleFactor, 3);
+
+        var circleBodyFixtureDef = new b2FixtureDef;
+        circleBodyFixtureDef.friction = 0.05;
+        circleBodyFixtureDef.restitution = 0.95;
+        circleBodyFixtureDef.density = 1;
+        circleBodyFixtureDef.userData = "ball";
+        circleBodyFixtureDef.shape = new b2CircleShape(0.4);
+
+        var frictionJointDef = new b2FrictionJointDef;
+        frictionJointDef.localAnchorA = new b2Vec2(0, 0);
+        frictionJointDef.localAnchorB = new b2Vec2(0, 0);
+        frictionJointDef.bodyB = groundBody;
+        frictionJointDef.maxForce = 0.2;
+        frictionJointDef.maxTorque = 0;
+
+        for (var i = 0; i < balls_counter; i++) {
+            //console.log(positions[i]);
+            circleBodyDef.position.x = positions[i].x;
+            circleBodyDef.position.y = positions[i].y;
+            var ball_body = world.CreateBody(circleBodyDef);
+            balls.push(ball_body);
+            balls[i].CreateFixture(circleBodyFixtureDef);
+            frictionJointDef.bodyA = ball_body;
+            world.CreateJoint(frictionJointDef);
+        }
+
+        //balls[0].ApplyImpulse(new b2Vec2(0, -5), balls[0].GetWorldCenter());
+        //balls[0].SetAngularVelocity(10);
+        //balls[0].ApplyImpulse(new b2Vec2(-400, 20), balls[0].GetWorldCenter());
+        //balls[0].ApplyImpulse(new b2Vec2(-4, 2), new b2Vec2(balls[0].GetPosition().x,
+                //balls[0].GetPosition().y + ball_radius / 2));
+
+//        circleBodyDef.position.x = 5;
+//        circleBodyDef.position.y = 5;
+//        var circleBody2 = world.CreateBody(circleBodyDef);
+//        circleBody2.CreateFixture(circleBodyFixtureDef);
+//        //circleBody2.ApplyImpulse(new b2Vec2(15 * scaleFactor, 9), circleBody2.GetWorldCenter());
+
+//        circleBodyDef.position.x = 8;
+//        circleBodyDef.position.y = 1;
+//        circleBody = world.CreateBody(circleBodyDef);
+//        circleBody.CreateFixture(circleBodyFixtureDef);
+
+        // friction joint for ball 1
+//        var frictionJointDef = new b2FrictionJointDef;
+//        frictionJointDef.localAnchorA = new b2Vec2(0, 0);
+//        frictionJointDef.localAnchorB = new b2Vec2(0, 0);
+//        frictionJointDef.bodyA = circleBody;
+//        frictionJointDef.bodyB = groundBody;
+//        frictionJointDef.maxForce = 0.2;
+//        frictionJointDef.maxTorque = 5;
+//        world.CreateJoint(frictionJointDef);
+
+        // friction joint for ball 2
+//        frictionJointDef.bodyA = circleBody2;
+//        world.CreateJoint(frictionJointDef);
+    }
+
+    function addLight() {
+        var spotLight = new THREE.SpotLight(0xFFFFFF);
+        spotLight.position.set(100, 400, 0);
+        spotLight.castShadow = true;
+        scene.add(spotLight);
+    }
+
+    function loadModels() {
+        var roomLoader = new THREE.OBJMTLLoader();
+        roomLoader.load("models/tabble/tabble.obj", "models/tabble/tabble.mtl", function(object) {
+            object.rotation.y = -Math.PI / 2;
+            object.scale.set(0.038, 0.036, 0.036);
+            object.position.set(-135, 85, 6);
+            scene.add(object);
+        });
+
+        // Load pool cue
+        var cueLoader = new THREE.OBJMTLLoader();
+        cueLoader.load("models/pool_cue.obj", "models/pool_cue.mtl", function(event) {
+            cueMesh = event;
+            cueMesh.scale.set(12, 12, 20);
+//            cueMesh.position.set(0, 85, 0);
+//            scene.add(cueMesh);
+        });
+
+        for (var i = 0; i < balls_counter; i++) {
+            var texture = THREE.ImageUtils.loadTexture("textures/Ball" + positions[i].num + ".jpg");
+            var mat = new THREE.MeshPhongMaterial();
+            mat.map = texture;
+            var ball = new THREE.Mesh(new THREE.SphereGeometry(3.082, 20), mat);
+            ball.receiveShadow = true;
+            ball.castShadow = true;
+//            ball.rotation.z = Math.PI / 2;
+            var zAxis = new THREE.Vector3(0, 0, 1);
+            rotateAroundWorldAxis(ball, zAxis, Math.PI / 2);
+            ball.position.set((positions[i].x - centerX) * mag_scale_factor, 85,
+                (positions[i].y - centerY) * mag_scale_factor);
+            scene.add(ball);
+            scene_balls.push(ball);
+            scene_balls[i].status = "in_game";
+            scene_balls[i].number = positions[i].num;
+        }
+    }
+
+    function setControls() {
+        orbitControls = new THREE.OrbitControls(camera);
+        orbitControls.target.set(0, 0, 0);
+//        orbitControls.minDistance = 300;
+//        orbitControls.maxDistance = 600;
+        orbitControls.noPan = true;
+        orbitControls.noRoll = true;
+        orbitControls.noZoom = true;
+        orbitControls.rotateSpeed = 0.8;
+        orbitControls.dynamicDampingFactor = 1;
+        orbitControls.minPolarAngle = Math.PI / 5;
+        orbitControls.maxPolarAngle = Math.PI / 3;
+        orbitControls.noKeys = true;
+    }
+
+    // Initialize statistics
+    function initStats() {
+        var stats = new Stats();
+        stats.setMode(0);
+        stats.domElement.style.position = "absolute";
+        stats.domElement.style.left = "0px";
+        stats.domElement.style.top = "0px";
+        document.getElementById("Stats-output").appendChild(stats.domElement);
+        return stats;
+    }
+
+    var counter = 300;
+    // Rendering
+    function render() {
+        var delta = clock.getDelta();
+        //orbitControls.update(delta);
+        stats.update();
+        world.Step(
+                1 / 60   //frame-rate
+                ,  10       //velocity iterations
+                ,  10       //position iterations
+        );
+        world.ClearForces();
+        updateObjects(delta);
+        if (gameState == "processingShoot") {
+            checkingSleepingObjects();
+        }
+        TWEEN.update();
+        if (gameState == "rotateCue") {
+            rotateCue();
+        }
+        requestAnimationFrame(render, document.getElementById("WebGL-output"));
+        renderer.render(scene, camera);
+    }
+
+    // Checking when all balls will be sleeping to change game state
+    function checkingSleepingObjects() {
+        for (var i = 0; i < balls_counter; i++) {
+//            if (balls[i].IsAwake()) {
+//                return;
+//            }
+            var vel = balls[i].GetLinearVelocity();
+            if (Math.abs(vel.x) >= 0.05 || Math.abs(vel.y) >= 0.05) {
+                return;
+            }
+        }
+        console.log("all are sleeping");
+        checkGoals();
+    }
+
+    function checkGoals() {
+        var needChangePlayer = false;
+
+        // если не было столкновений c шарами при разбиве(или не было соударений со стенами, или
+        // биток закатился в лузу), то выставляем биток в доме и меняем очередь игроков
+        if (shoots == 1 && (ballBallCollisions == 0 || ballWallCollisions == 0 || scene_balls[0].status == "sinking")) {
+            gameState = "setup";
+            balls[0].SetPosition(new b2Vec2(positions[0].x, positions[0].y));
+            scene_balls[0].status = "in_game";
+            scene.add(scene_balls[0]);
+            changePlayer();
+            return;
+        }
+
+        var firstGoal = -1;
+        if (pocketedBalls.length != 0) {
+            firstGoal = positions[pocketedBalls[0]].num;
+        }
+
+        var firstCol = -1;
+        if (cueBallCollisions.length != 0) {
+            firstCol = positions[cueBallCollisions[0]].num;
+        }
+
+        if (firstGoal != -1 && player1BallType == "unknown") {
+            if (firstGoal < 8) {
+                if (currentPlayer == 1) {
+                    player1BallType = "solid";
+                    player2BallType = "striped";
+                } else {
+                    player1BallType = "striped";
+                    player2BallType = "solid";
+                }
+            } else if (firstGoal > 8) {
+                if (currentPlayer == 1) {
+                    player1BallType = "striped";
+                    player2BallType = "solid";
+                } else {
+                    player1BallType = "solid";
+                    player2BallType = "striped";
+                }
+            }
+
+            text1.innerHTML += ": " + player1BallType;
+            text2.innerHTML += ": " + player2BallType;
+        }
+
+        // перераспределяем шары
+        if (player1BallType != "unknown") {
+            moveBallsFromTempStorage();
+        }
+        console.log(pocketedBalls);
+        console.log(player1Balls);
+        console.log(player2Balls);
+
+        // проверяем забитые шары и обновляем счёт
+        for (var i = 1; i < balls_counter; i++) {
+            if (scene_balls[i].status == "sinking") {
+                scene_balls[i].status = "goal";
+            }
+        }
+        if (firstGoal == -1) {
+            needChangePlayer = true;
+        }
+
+        // здесь биток закатился во время игры (или не было столкновений с шарами, или коснулся не своей группы)
+        console.log("Check bad first collision: ball is " + firstCol + " and badFirst is " + badFirstCollision(firstCol));
+        if (scene_balls[0].status == "sinking" || ballBallCollisions == 0 || badFirstCollision(firstCol)) {
+            // нужно выставить биток на поле в произвольном месте
+            gameState = "setCueBall";
+            console.log(gameState);
+            // перебираем свободные позиции
+            top:
+            for (var x = 20 - 2.54 / 2 * scaleFactor + 1.2; x < 20 + tableLength / 4 * scaleFactor - 1.2; x++) {
+                for (var y = 20 - tableLength / 4 * scaleFactor + 1.2; y < 10 + 1.27 / 2 * scaleFactor - 1.2; y++) {
+                    for (var i = 1; i < balls_counter; i++) {
+                        var xn = balls[i].GetPosition().x, yn = balls[i].GetPosition().y;
+                        if ((xn - x) * (xn - x) + (yn - y) * (yn - y) >= 0.8) {
+                            balls[0].SetPosition(new b2Vec2(x, y));
+                            console.log(x + " " + y);
+                            break top;
+                        }
+                    }
+                }
+            }
+            scene_balls[0].status = "in_game";
+            scene.add(scene_balls[0]);
+            changePlayer();
+            return;
+        }
+
+        if (needChangePlayer) {
+            changePlayer();
+        }
+
+        gameState = "preparingNextShoot";
+    }
+
+    function badFirstCollision(firstCol) {
+        if (firstCol == -1 || player1BallType == "unknown") {
+            return false;
+        }
+        if ((currentPlayer == 1 && player1BallType == "solid" && firstCol > 8) ||
+                (currentPlayer == 1 && player1BallType == "striped" && firstCol < 8) ||
+                (firstCol == 8 && player1Balls.length < 7)) {
+            return true;
+        }
+        if ((currentPlayer == 2 && player2BallType == "solid" && firstCol > 8) ||
+                (currentPlayer == 2 && player2BallType == "striped" && firstCol < 8) ||
+                (firstCol == 8 && player2Balls.length < 7)) {
+            return true;
+        }
+        return false;
+    }
+
+    function moveBallsFromTempStorage() {
+        var tempBalls = [], i;
+        for (i = 0; i < player1Balls.length; i++) {
+            tempBalls.push(player1Balls[i]);
+        }
+        for (i = 0; i < player2Balls.length; i++) {
+            tempBalls.push(player2Balls[i]);
+        }
+
+        player1Balls = [];
+        player2Balls = [];
+        if (player1BallType == "solid") {
+            for (i = 0; i < tempBalls.length; i++) {
+                if (positions[tempBalls[i]].num < 8) {
+                    player1Balls.push(tempBalls[i]);
+                } else {
+                    player2Balls.push(tempBalls[i]);
+                }
+            }
+        } else {
+            for (i = 0; i < tempBalls.length; i++) {
+                if (positions[tempBalls[i]].num > 8) {
+                    player1Balls.push(tempBalls[i]);
+                } else {
+                    player2Balls.push(tempBalls[i]);
+                }
+            }
+        }
+    }
+
+    function changePlayer() {
+        if (currentPlayer == 1) {
+            currentPlayer = 2;
+            text2.style.color = "red";
+            text1.style.color = "white";
+        } else {
+            currentPlayer = 1;
+            text2.style.color = "white";
+            text1.style.color = "red";
+        }
+    }
+
+    // Updating positions
+    function updateObjects(delta) {
+//        ball.position.set((circleBody.GetPosition().x - centerX) * mag_scale_factor, 87,
+//                (circleBody.GetPosition().y - centerY) * mag_scale_factor);
+        for (var i = 0; i < balls_counter; i++) {
+            if (scene_balls[i].status != "in_game") {
+                continue;
+            }
+            scene_balls[i].position.set((balls[i].GetPosition().x - centerX) * mag_scale_factor, 87,
+                    (balls[i].GetPosition().y - centerY) * mag_scale_factor);
+            //scene_balls[i].rotation.y = -balls[i].GetAngle();
+            var angle_z = balls[i].GetAngularVelocity() * delta;
+
+            var linear_velocity_y = balls[i].GetLinearVelocity().y;
+            var angular_velocity_y = linear_velocity_y / ball_radius;
+            var angle_y = angular_velocity_y * delta;
+            //scene_balls[i].rotation.x += angle_y;
+
+            var linear_velocity_x = balls[i].GetLinearVelocity().x;
+            var angular_velocity_x = linear_velocity_x / ball_radius;
+            var angle_x = angular_velocity_x * delta;
+            //scene_balls[i].rotation.z -= angle_x;
+
+            var xAxis = new THREE.Vector3(1, 0, 0);
+            rotateAroundWorldAxis(scene_balls[i], xAxis, angle_y);
+
+            var yAxis = new THREE.Vector3(0, 1, 0);
+            rotateAroundWorldAxis(scene_balls[i], yAxis, -angle_z);
+
+            var zAxis = new THREE.Vector3(0, 0, 1);
+            rotateAroundWorldAxis(scene_balls[i], zAxis, -angle_x);
+        }
+    }
+
+    var rotWorldMatrix;
+    function rotateAroundWorldAxis(object, axis, radians) {
+        rotWorldMatrix = new THREE.Matrix4();
+        rotWorldMatrix.makeRotationAxis(axis.normalize(), radians);
+
+        // old code for Three.JS pre r54:
+        //  rotWorldMatrix.multiply(object.matrix);
+        // new code for Three.JS r55+:
+        rotWorldMatrix.multiply(object.matrix);                // pre-multiply
+
+        object.matrix = rotWorldMatrix;
+
+        // old code for Three.js pre r49:
+        // object.rotation.getRotationFromMatrix(object.matrix, object.scale);
+        // old code for Three.js pre r59:
+        // object.rotation.setEulerFromRotationMatrix(object.matrix);
+        // code for r59+:
+        object.rotation.setFromRotationMatrix(object.matrix);
+    }
+
+    function keyPressed(event) {
+        var keyChar = getChar(event);
+        keyChar = keyChar.toLowerCase();
+
+        switch (keyChar) {
+            // Cue ball setup
+            case 'w':
+                if (gameState == "setup" && balls[0].GetPosition().x > positions[0].x) {
+                    balls[0].SetPosition(new b2Vec2(balls[0].GetPosition().x - 0.5, balls[0].GetPosition().y));
+                    if (balls[0].GetPosition().x < positions[0].x) {
+                        balls[0].SetPosition(new b2Vec2(positions[0].x, balls[0].GetPosition().y));
+                    }
+                }
+
+                if (gameState == "setCueBall" && balls[0].GetPosition().x > 20 - 2.54 / 2 * scaleFactor + 1.5) {
+                    var targetPosition = new b2Vec2(balls[0].GetPosition().x - 0.5, balls[0].GetPosition().y);
+                    if (checkGoodPositionWithBalls(targetPosition)) {
+                        balls[0].SetPosition(targetPosition);
+                    }
+                }
+                break;
+
+            case 's':
+                if (gameState == "setup" && balls[0].GetPosition().x < 20 + 2.54 / 2 * scaleFactor - 1.5) {
+                    balls[0].SetPosition(new b2Vec2(balls[0].GetPosition().x + 0.5, balls[0].GetPosition().y));
+                }
+
+                if (gameState == "setCueBall" && balls[0].GetPosition().x < 20 + 2.54 / 2 * scaleFactor - 1.5) {
+                    var targetPosition = new b2Vec2(balls[0].GetPosition().x + 0.5, balls[0].GetPosition().y);
+                    if (checkGoodPositionWithBalls(targetPosition)) {
+                        balls[0].SetPosition(targetPosition);
+                    }
+                }
+                break;
+
+            case 'a':
+                if (gameState == "setup" && balls[0].GetPosition().y < 10 + 1.27 / 2 * scaleFactor - 1) {
+                    balls[0].SetPosition(new b2Vec2(balls[0].GetPosition().x, balls[0].GetPosition().y + 0.5));
+                }
+
+                if (gameState == "setCueBall" && balls[0].GetPosition().y < 10 + 1.27 / 2 * scaleFactor - 1) {
+                    var targetPosition = new b2Vec2(balls[0].GetPosition().x, balls[0].GetPosition().y + 0.5);
+                    if (checkGoodPositionWithBalls(targetPosition)) {
+                        balls[0].SetPosition(targetPosition);
+                    }
+                }
+                break;
+
+            case 'd':
+                if (gameState == "setup" && balls[0].GetPosition().y > 10 - 1.27 / 2 * scaleFactor + 1) {
+                    balls[0].SetPosition(new b2Vec2(balls[0].GetPosition().x, balls[0].GetPosition().y - 0.5));
+                }
+
+                if (gameState == "setCueBall" && balls[0].GetPosition().y > 10 - 1.27 / 2 * scaleFactor + 1) {
+                    var targetPosition = new b2Vec2(balls[0].GetPosition().x, balls[0].GetPosition().y - 0.5);
+                    if (checkGoodPositionWithBalls(targetPosition)) {
+                        balls[0].SetPosition(targetPosition);
+                    }
+                }
+                break;
+
+            // Set prepareShoot state
+            case ' ':
+                if (gameState == "setCueBall") {
+                    gameState = "preparingNextShoot";
+                    balls[0].SetAwake(true);
+                }
+
+                if (gameState == "setup" || gameState == "preparingNextShoot") {
+
+                    // выводим номер текущего игрока
+                    console.log("Current player: " + currentPlayer);
+                    console.log("Player1: " + player1BallType);
+                    console.log("Player2: " + player2BallType);
+
+                    gameState = "prepareShoot";
+                    orbitControls.noRotate = true;
+                    var movingVector = new THREE.Vector3(scene_balls[0].position.x, scene_balls[0].position.y,
+                        scene_balls[0].position.z);
+                    movingVector.sub(camera.position);
+                    var length = movingVector.length();
+                    movingVector.multiplyScalar(30 / length);
+                    console.log(movingVector);
+                    var currentPosition = camera.position.clone();
+                    var targetPosition = scene_balls[0].position.clone();
+                    targetPosition.sub(movingVector);
+                    targetPosition.y = 95;
+                    oldCameraPosition = camera.position.clone();
+                    oldBallPosition = scene_balls[0].position.clone();
+                    var zoomCameraTween = new TWEEN.Tween(currentPosition).to(targetPosition, 1000);
+                    zoomCameraTween.onUpdate(function() {
+                        camera.position.x = currentPosition.x;
+                        camera.position.y = currentPosition.y;
+                        camera.position.z = currentPosition.z;
+                    });
+                    zoomCameraTween.onComplete(function() {
+                        orbitControls.target.set(scene_balls[0].position.x, scene_balls[0].position.y,
+                                scene_balls[0].position.z);
+                        var vector = new THREE.Vector3(0, 0, -1);
+                        vector.applyQuaternion(camera.quaternion);
+                        var angle = vector.angleTo(scene_balls[0].position);
+                        //console.log(angle);
+                        orbitControls.minPolarAngle = Math.PI / 2.5;
+                        orbitControls.maxPolarAngle = Math.PI / 2.5;
+                        orbitControls.noRotate = false;
+                        gameState = "rotateCue";
+                        //scene_balls[0].add(cueMesh);
+                        scene.add(cueMesh);
+                    });
+                    zoomCameraTween.start();
+                    var cameraTarget = new THREE.Vector3(0, 0, 0);
+                    var tween = new TWEEN.Tween(cameraTarget).to(scene_balls[0].position, 1000);
+                    tween.onUpdate(function () {
+                                camera.lookAt(cameraTarget);
+                    });
+                    tween.start();
+                }
+
+                if (gameState == "rotateCue") {
+                    gameState = "makeShoot";
+                    orbitControls.noRotate = true;
+                }
+
+                break;
+        }
+    }
+
+    function checkGoodPositionWithBalls(pos) {
+        for (var i = 1; i < balls_counter; i++) {
+            var xn = balls[i].GetPosition().x, yn = balls[i].GetPosition().y;
+            if ((xn - pos.x) * (xn - pos.x) + (yn - pos.y) * (yn - pos.y) < 0.8) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // event.type должен быть keypress
+    function getChar(event) {
+        if (event.which == null) {  // IE
+            if (event.keyCode < 32) return null; // спец. символ
+            return String.fromCharCode(event.keyCode)
+        }
+
+        if (event.which!=0 && event.charCode!=0) { // все кроме IE
+            if (event.which < 32) return null; // спец. символ
+            return String.fromCharCode(event.which); // остальные
+        }
+
+        return null; // спец. символ
+    }
+
+    function clickListener(event) {
+    }
+
+    function rotateCue() {
+        var cuePosition = scene_balls[0].position.clone();
+        var movingVector = new THREE.Vector3(scene_balls[0].position.x, scene_balls[0].position.y,
+                scene_balls[0].position.z);
+        movingVector.sub(camera.position);
+        var length = movingVector.length();
+        movingVector.multiplyScalar(30 / length);
+        cuePosition.sub(movingVector);
+        cuePosition.y -= 0.5;
+        cueMesh.position.set(cuePosition.x, cuePosition.y, cuePosition.z);
+        cueMesh.rotation.x = camera.rotation.x;
+        cueMesh.rotation.y = camera.rotation.y;
+        cueMesh.rotation.z = camera.rotation.z;
+        //console.log(cueMesh.position);
+    }
+
+    function setCueToOriginalPosition() {
+        var cuePosition = scene_balls[0].position.clone();
+        var movingVector = new THREE.Vector3(scene_balls[0].position.x, scene_balls[0].position.y,
+                scene_balls[0].position.z);
+        movingVector.sub(camera.position);
+        var length = movingVector.length();
+        movingVector.multiplyScalar(30 / length);
+        cuePosition.sub(movingVector);
+        cuePosition.y -= 0.5;
+        cueMesh.position.set(cuePosition.x, cuePosition.y, cuePosition.z);
+    }
+
+    function setCueToFarPosition() {
+        var cuePosition = scene_balls[0].position.clone();
+        var movingVector = new THREE.Vector3(scene_balls[0].position.x, scene_balls[0].position.y,
+                scene_balls[0].position.z);
+        movingVector.sub(camera.position);
+        var length = movingVector.length();
+        movingVector.multiplyScalar(38 / length);
+        cuePosition.sub(movingVector);
+        cuePosition.y -= 0.5;
+        cueMesh.position.set(cuePosition.x, cuePosition.y, cuePosition.z);
+    }
+
+    var lastMove = 0;
+    var lastTimeout = 0;
+    var deltaMove = 0, lastMouseY = -1, deltaTime;
+    function mouseMoveListener(e) {
+        if (gameState == "makeShoot") {
+            var currentMove = (new Date()).getTime();
+            if (lastTimeout != 0) {
+                clearTimeout(lastTimeout);
+            }
+            if (currentMove - lastMove > 100) {
+                //console.log("started");
+                deltaMove = 0;
+                deltaTime = 0;
+            } else {
+                deltaTime += currentMove - lastMove;
+            }
+            if (lastMouseY > -1) {
+                deltaMove += lastMouseY - e.pageY;
+            }
+            lastMouseY = e.pageY;
+            lastMove = currentMove;
+            lastTimeout = setTimeout(function() {
+                var currentMove = (new Date()).getTime();
+                if (currentMove - lastMove > 100) {
+                    //console.log("stopped");
+                    updateCue(deltaMove, deltaTime);
+                    deltaMove = 0;
+                    deltaTime = 0;
+                }
+            }, 110);
+        }
+    }
+
+    function updateCue(deltaMove, deltaTime) {
+        //console.log(deltaMove + " in " + deltaTime + " ms");
+        var movPos = scene_balls[0].position.clone();
+        var movingVector = new THREE.Vector3(cueMesh.position.x, cueMesh.position.y,
+                cueMesh.position.z);
+        movingVector.sub(movPos);
+        var length = movingVector.length();
+        movingVector.multiplyScalar(Math.abs(deltaMove) / 50 / length);
+        var targetPosition;
+        if (deltaMove < 0) {
+            // отдаляем кий
+            targetPosition = cueMesh.position.clone();
+            targetPosition.add(movingVector);
+            if (targetPosition.distanceTo(scene_balls[0].position) <= 38) {
+                var curPos = cueMesh.position.clone();
+                var moveTween = new TWEEN.Tween(curPos).to(targetPosition, 75);
+                moveTween.onUpdate(function() {
+                    cueMesh.position.x = curPos.x;
+                    cueMesh.position.y = curPos.y;
+                    cueMesh.position.z = curPos.z;
+                });
+                moveTween.start();
+                //cueMesh.position = targetPosition;
+            } else {
+                setCueToFarPosition();
+            }
+        } else {
+            // приближаем кий
+            targetPosition = cueMesh.position.clone();
+            targetPosition.sub(movingVector);
+            if (targetPosition.distanceTo(scene_balls[0].position) < 29.86) {
+                // возвращем кий в ударную позицию...
+                setCueToOriginalPosition();
+                // и обрабатываем удар
+                console.log("shoot with speed: " + Math.abs(deltaMove) / deltaTime);
+                var soundVelocity = Math.abs(deltaMove) / deltaTime;
+                if (soundVelocity > 0.5 && soundVelocity !== Infinity) {
+                    soundVelocity /= 15.36;
+                    if (soundVelocity > 1) {
+                        soundVelocity = 1;
+                    }
+                    gameState = "processingShoot";
+                    orbitControls.noRotate = true;
+                    performShoot(Math.abs(deltaMove) / deltaTime);
+                    playSound(2, soundVelocity, 0, 0);
+                }
+            } else {
+                var curPos = cueMesh.position.clone();
+                var moveTween = new TWEEN.Tween(curPos).to(targetPosition, 75);
+                moveTween.onUpdate(function() {
+                    cueMesh.position.x = curPos.x;
+                    cueMesh.position.y = curPos.y;
+                    cueMesh.position.z = curPos.z;
+                });
+                moveTween.start();
+                //cueMesh.position = targetPosition;
+            }
+        }
+    }
+
+    function performShoot(velocity) {
+        // увеличиваем счётчик ударов
+        shoots++;
+
+        // обнуляем счетчики столкновений
+        ballBallCollisions = 0;
+        ballWallCollisions = 0;
+
+        // Обнуляем массив забитых шаров и столкновений
+        pocketedBalls = [];
+        cueBallCollisions = [];
+
+        var shootVector = scene_balls[0].position.clone();
+        shootVector.sub(camera.position);
+        if (velocity > 16) {
+            velocity = 16;
+        }
+        velocity /= 4;
+        balls[0].ApplyImpulse(new b2Vec2(shootVector.x * velocity, shootVector.z * velocity),
+                balls[0].GetWorldCenter());
+
+        // твин отдаления камеры
+        var prevCameraPos = camera.position.clone(), nextCameraPos = camera.position.clone();
+        nextCameraPos.setLength(384.05);
+        var unzoomCameraTween = new TWEEN.Tween(prevCameraPos).to(nextCameraPos, 1000);
+        unzoomCameraTween.onUpdate(function() {
+            camera.position.x = prevCameraPos.x;
+            camera.position.y = prevCameraPos.y;
+            camera.position.z = prevCameraPos.z;
+        });
+        var lookAtCenterTween = new TWEEN.Tween(oldBallPosition).to(scene.position, 1000);
+        lookAtCenterTween.onUpdate(function() {
+            camera.lookAt(oldBallPosition);
+            orbitControls.target.set(0, 0, 0);
+            orbitControls.minPolarAngle = Math.PI / 5;
+            orbitControls.maxPolarAngle = Math.PI / 3;
+            orbitControls.noRotate = false;
+        });
+
+        // твин убирания кия
+        var oldCuePosition = cueMesh.position.clone();
+        // для начала вычисляем вектор перемещения
+        var targetPosition = cueMesh.position.clone();
+        targetPosition.sub(scene_balls[0].position);
+        targetPosition.multiplyScalar(15); // чтобы далеко уехал
+        var cueVanishingTween = new TWEEN.Tween(oldCuePosition).to(targetPosition, 1000);
+        cueVanishingTween.onUpdate(function() {
+            cueMesh.position.x = oldCuePosition.x;
+            cueMesh.position.y = oldCuePosition.y;
+            cueMesh.position.z = oldCuePosition.z;
+        });
+        cueVanishingTween.onComplete(function() {
+            // по зверешении удаляем кий из сцены
+            scene.remove(cueMesh);
+        });
+
+        // запускаем все твины
+        cueVanishingTween.start();
+        unzoomCameraTween.start();
+        lookAtCenterTween.start();
+    }
+
+</script>
+
+</body>
+</html>
